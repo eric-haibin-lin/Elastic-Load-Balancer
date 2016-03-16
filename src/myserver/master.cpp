@@ -6,6 +6,7 @@
 #include "server/master.h"
 #include <map>
 #include <queue> 
+#include <string>
 
 static struct Master_state {
 
@@ -19,9 +20,11 @@ static struct Master_state {
   int num_ongoing_client_requests;
   int next_tag;
 
-  Worker_handle my_worker;
+  Worker_handle my_worker[16];
+  int worker_idx;
   std::queue<Request_msg> message_queue;
   std::map<int, Client_handle> client_map;
+
 
 } mstate;
 
@@ -34,6 +37,7 @@ void master_node_init(int max_workers, int& tick_period) {
 
   mstate.next_tag = 0;
   mstate.max_num_workers = max_workers;
+  mstate.worker_idx = 0;
   mstate.num_ongoing_client_requests = 0;
 
   // don't mark the server as ready until the server is ready to go.
@@ -41,12 +45,12 @@ void master_node_init(int max_workers, int& tick_period) {
   // when 'master_node_init' returnes
   mstate.server_ready = false;
 
-  // fire off a request for a new worker
-  int tag = random();
-  Request_msg req(tag);
-  req.set_arg("name", "my worker 0");
-  request_new_worker_node(req);
-
+  for (int i = 0; i < max_workers; i++) {
+    // fire off a request for a new worker
+    Request_msg req(i);
+    req.set_arg("name", "my worker " + std::to_string(i));
+    request_new_worker_node(req);
+  }
 }
 
 void handle_new_worker_online(Worker_handle worker_handle, int tag) {
@@ -54,12 +58,13 @@ void handle_new_worker_online(Worker_handle worker_handle, int tag) {
   // 'tag' allows you to identify which worker request this response
   // corresponds to.  Since the starter code only sends off one new
   // worker request, we don't use it here.
-  mstate.my_worker = worker_handle;
+  mstate.my_worker[mstate.worker_idx++] = worker_handle;
 
   // Now that a worker is booted, let the system know the server is
   // ready to begin handling client requests.  The test harness will
   // now start its timers and start hitting your server with requests.
-  if (mstate.server_ready == false) {
+  if (mstate.server_ready == false && mstate.worker_idx == mstate.max_num_workers) {
+    mstate.worker_idx = 0;
     server_init_complete();
     mstate.server_ready = true;
   }
@@ -113,8 +118,10 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
       return;
   }
 
-  send_request_to_worker(mstate.my_worker, worker_req);
+  // Round robin all workers
+  send_request_to_worker(mstate.my_worker[mstate.worker_idx], worker_req);
   mstate.num_ongoing_client_requests++;
+  mstate.worker_idx = (mstate.worker_idx + 1) % mstate.max_num_workers;
 
   // We're done!  This event handler now returns, and the master
   // process calls another one of your handlers when action is
