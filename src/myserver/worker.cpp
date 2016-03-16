@@ -9,6 +9,7 @@
 #include "server/worker.h"
 #include "tools/cycle_timer.h"
 #include <thread>
+#include <string>
 #include "tools/work_queue.h"
 
 #define NUM_THREADS 24
@@ -54,6 +55,25 @@ static void execute_compareprimes(const Request_msg& req, Response_msg& resp) {
       resp.set_response("There are more primes in second range.");
 }
 
+// execute parts of compareprimes
+static void execute_compareprimes_partial(const Request_msg& req, Response_msg& resp) {
+
+  int params[4];
+
+  // grab the four arguments defining the two ranges
+  params[0] = atoi(req.get_arg("n1").c_str());
+  params[1] = atoi(req.get_arg("n2").c_str());
+  params[2] = atoi(req.get_arg("n3").c_str());
+  params[3] = atoi(req.get_arg("n4").c_str());
+
+  auto i = req.get_arg("i");
+  Request_msg dummy_req(0);
+  Response_msg dummy_resp(0);
+  create_computeprimes_req(dummy_req, params[std::stoi(i)]);
+  execute_work(dummy_req, dummy_resp);
+  resp.set_response(dummy_resp.get_response().c_str());
+}
+
 
 void worker_node_init(const Request_msg& params) {
 
@@ -92,7 +112,7 @@ void worker_thread() {
       // requests from the client are one-to-one with calls to
       // execute_work.
 
-      execute_compareprimes(req, resp);
+      execute_compareprimes_partial(req, resp);
 
     } else {
 

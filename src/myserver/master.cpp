@@ -8,6 +8,12 @@
 #include <queue> 
 #include <string>
 
+struct Count_prime_result {
+  int count;
+  int first_tag;
+  int data;
+};
+
 static struct Master_state {
 
   // The mstate struct collects all the master node state into one
@@ -24,10 +30,11 @@ static struct Master_state {
   int worker_idx;
   std::queue<Request_msg> message_queue;
   std::map<int, Client_handle> client_map;
-
+  std::map<int, Count_prime_result> prime_map;
 
 } mstate;
 
+void send(Request_msg worker_req);
 
 void master_node_init(int max_workers, int& tick_period) {
 
@@ -77,9 +84,36 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
   auto tag = resp.get_tag();
   DLOG(INFO) << "Master received a response from a worker: [" << tag << ":" << resp.get_response() << "]" << std::endl;
 
-  send_client_response(mstate.client_map[tag], resp);
-  mstate.client_map.erase(tag);
-  mstate.num_ongoing_client_requests--;
+  // aggregate results for compare_prime
+  if (mstate.prime_map.find(tag) != mstate.prime_map.end()) {
+    auto& current = mstate.prime_map[tag];
+    auto first_tag = current.first_tag;
+    auto& first = mstate.prime_map[first_tag];
+    
+    first.count++;
+    current.data = std::stoi(resp.get_response());
+    if (first.count == 4) {
+      // the other results
+      auto& second = mstate.prime_map[first_tag + 1];
+      auto& third = mstate.prime_map[first_tag + 2];
+      auto& fourth = mstate.prime_map[first_tag + 3];
+
+      // compare 
+      Response_msg aggregate_resp(0);
+      if (second.data - first.data > fourth.data - third.data) {
+        aggregate_resp.set_response("There are more primes in first range.");
+      } else {
+        aggregate_resp.set_response("There are more primes in second range.");
+      }
+      send_client_response(mstate.client_map[first_tag], aggregate_resp);
+      mstate.client_map.erase(first_tag);
+    }
+    mstate.num_ongoing_client_requests--;
+  } else {
+    send_client_response(mstate.client_map[tag], resp);
+    mstate.client_map.erase(tag);
+    mstate.num_ongoing_client_requests--;
+  }
 
   // Send the next message if necessary
   if (mstate.num_ongoing_client_requests == 0 && mstate.message_queue.size() > 0) {
@@ -118,10 +152,33 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
       return;
   }
 
-  // Round robin all workers
-  send_request_to_worker(mstate.my_worker[mstate.worker_idx], worker_req);
-  mstate.num_ongoing_client_requests++;
-  mstate.worker_idx = (mstate.worker_idx + 1) % mstate.max_num_workers;
+  if (client_req.get_arg("cmd") == "compareprimes") {
+    auto first_tag = tag;
+    // init the struct for partial results
+    struct Count_prime_result results;
+    results.count = 0;
+    results.first_tag = first_tag;
+    mstate.prime_map[tag] = results;
+    
+    // send the first request 
+    worker_req.set_arg("i", "0");
+    send(worker_req);
+
+    // the other three requests
+    for (int i = 1; i < 4; i++) {
+      // init the struct for partial results
+      struct Count_prime_result results;
+      results.count = 0;
+      results.first_tag = first_tag;
+      mstate.prime_map[mstate.next_tag] = results;
+      // send
+      worker_req.set_tag(mstate.next_tag++);
+      worker_req.set_arg("i", std::to_string(i));
+      send(worker_req);
+    }
+  } else {
+    send(worker_req);
+  }
 
   // We're done!  This event handler now returns, and the master
   // process calls another one of your handlers when action is
@@ -129,6 +186,12 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
 
 }
 
+void send(Request_msg worker_req) {
+  // Round robin all workers
+  send_request_to_worker(mstate.my_worker[mstate.worker_idx], worker_req);
+  mstate.num_ongoing_client_requests++;
+  mstate.worker_idx = (mstate.worker_idx + 1) % mstate.max_num_workers;  
+}
 
 void handle_tick() {
 
