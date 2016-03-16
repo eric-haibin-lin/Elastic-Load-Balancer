@@ -21,7 +21,7 @@ static struct Master_state {
 
   Worker_handle my_worker;
   std::queue<Request_msg> message_queue;
-  std::map<int, Client_handle> tag_client_map;
+  std::map<int, Client_handle> client_map;
 
 } mstate;
 
@@ -42,7 +42,6 @@ void master_node_init(int max_workers, int& tick_period) {
   mstate.server_ready = false;
 
   // fire off a request for a new worker
-
   int tag = random();
   Request_msg req(tag);
   req.set_arg("name", "my worker 0");
@@ -73,30 +72,24 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
   auto tag = resp.get_tag();
   DLOG(INFO) << "Master received a response from a worker: [" << tag << ":" << resp.get_response() << "]" << std::endl;
 
-  send_client_response(mstate.tag_client_map[tag], resp);
+  send_client_response(mstate.client_map[tag], resp);
   mstate.num_ongoing_client_requests--;
 
   // Send the next message if necessary
-  if (mstate.message_queue.size() > 0) {
-    // Get the next request 
+  if (mstate.num_ongoing_client_requests == 0 && mstate.message_queue.size() > 0) {
+    // Get the next request
     auto request = mstate.message_queue.front();
     mstate.message_queue.pop();
 
     // You can assume that traces end with this special message.  It
     // exists because it might be useful for debugging to dump
     // information about the entire run here: statistics, etc.
-    if (request.get_arg("cmd") == "lastrequest") {
-      Response_msg resp(0);
-      resp.set_response("ack");
-      auto client = mstate.tag_client_map[request.get_tag()];
-      send_client_response(client, resp);
-      return;
-    } else {
-      send_request_to_worker(mstate.my_worker, request);  
-      mstate.num_ongoing_client_requests++;
-    }
+    Response_msg resp(0);
+    resp.set_response("ack");
+    auto client = mstate.client_map[request.get_tag()];
+    send_client_response(client, resp);
+    return;
   }
-
 }
 
 void handle_client_request(Client_handle client_handle, const Request_msg& client_req) {
@@ -112,17 +105,15 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
   // Save off the handle to the client that is expecting a response.
   // The master needs to do this it can response to this client later
   // when 'handle_worker_response' is called.
-  mstate.tag_client_map[tag] = client_handle;
+  mstate.client_map[tag] = client_handle;
   
-  // The provided starter code cannot handle multiple pending client
-  // requests.  The server returns an error message, and the checker
-  // will mark the response as "incorrect"
-  if (mstate.num_ongoing_client_requests > 0) {
-    mstate.message_queue.push(worker_req);
-  } else {
-    send_request_to_worker(mstate.my_worker, worker_req);
-    mstate.num_ongoing_client_requests++;
+  if (client_req.get_arg("cmd") == "lastrequest") {
+      mstate.message_queue.push(worker_req);
+      return;
   }
+
+  send_request_to_worker(mstate.my_worker, worker_req);
+  mstate.num_ongoing_client_requests++;
 
   // We're done!  This event handler now returns, and the master
   // process calls another one of your handlers when action is
