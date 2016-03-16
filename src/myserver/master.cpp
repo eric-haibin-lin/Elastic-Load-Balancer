@@ -73,6 +73,7 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
   DLOG(INFO) << "Master received a response from a worker: [" << tag << ":" << resp.get_response() << "]" << std::endl;
 
   send_client_response(mstate.client_map[tag], resp);
+  mstate.client_map.erase(tag);
   mstate.num_ongoing_client_requests--;
 
   // Send the next message if necessary

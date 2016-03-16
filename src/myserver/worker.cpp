@@ -10,7 +10,6 @@
 #include "tools/cycle_timer.h"
 #include <thread>
 #include "tools/work_queue.h"
-#include "../myserver/configuration.h"
 
 #define NUM_THREADS 24
 
@@ -74,7 +73,7 @@ void worker_node_init(const Request_msg& params) {
 
 void worker_thread() {
   while (true) {
-    
+
     auto req = queue.get_work();
     // Make the tag of the reponse match the tag of the request.  This
     // is a way for your master to match worker responses to requests.
