@@ -30,7 +30,9 @@ static struct Master_state {
   int worker_idx;
   std::queue<Request_msg> message_queue;
   std::map<int, Client_handle> client_map;
-  std::map<int, Count_prime_result> prime_map;
+  std::map<int, Count_prime_result> compare_prime_map;
+  std::map<std::string, Response_msg> count_prime_map;
+  std::map<int, std::string> request_map;
 
 } mstate;
 
@@ -84,20 +86,27 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
   auto tag = resp.get_tag();
   DLOG(INFO) << "Master received a response from a worker: [" << tag << ":" << resp.get_response() << "]" << std::endl;
 
-  // aggregate results for compare_prime
-  if (mstate.prime_map.find(tag) != mstate.prime_map.end()) {
-    auto& current = mstate.prime_map[tag];
+  // special case: compute_prime. cache the result
+  if (mstate.request_map.find(tag) != mstate.request_map.end()) {
+    auto request_string = mstate.request_map[tag];
+    mstate.count_prime_map[request_string] = resp;
+    mstate.request_map.erase(tag);
+  }
+
+  // special case: compare_prime, aggregate results 
+  if (mstate.compare_prime_map.find(tag) != mstate.compare_prime_map.end()) {
+    auto& current = mstate.compare_prime_map[tag];
     auto first_tag = current.first_tag;
-    auto& first = mstate.prime_map[first_tag];
+    auto& first = mstate.compare_prime_map[first_tag];
     // increment counter
     first.count++;
     // update data
     current.data = std::stoi(resp.get_response());
     if (first.count == 4) {
       // the other results
-      auto& second = mstate.prime_map[first_tag + 1];
-      auto& third = mstate.prime_map[first_tag + 2];
-      auto& fourth = mstate.prime_map[first_tag + 3];
+      auto& second = mstate.compare_prime_map[first_tag + 1];
+      auto& third = mstate.compare_prime_map[first_tag + 2];
+      auto& fourth = mstate.compare_prime_map[first_tag + 3];
 
       // compare 
       Response_msg aggregate_resp(0);
@@ -111,15 +120,14 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
       mstate.client_map.erase(first_tag);
     }
     mstate.num_ongoing_client_requests--;
-
   } else {
-    // not compare_prime: just send the result back
+    // otherwise, just send the result back
     send_client_response(mstate.client_map[tag], resp);
     mstate.client_map.erase(tag);
     mstate.num_ongoing_client_requests--;
   }
 
-  // Send the ack message if necessary
+  // Send the ack message at last (not sure if necessary)
   if (mstate.num_ongoing_client_requests == 0 && mstate.message_queue.size() > 0) {
     // Get the ack request
     auto request = mstate.message_queue.front();
@@ -151,18 +159,20 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
   // when 'handle_worker_response' is called.
   mstate.client_map[tag] = client_handle;
   
+  // lastrequest
   if (client_req.get_arg("cmd") == "lastrequest") {
       mstate.message_queue.push(worker_req);
       return;
   }
 
+  // compareprimes
   if (client_req.get_arg("cmd") == "compareprimes") {
     auto first_tag = tag;
     // init the struct for partial results
     struct Count_prime_result results;
     results.count = 0;
     results.first_tag = first_tag;
-    mstate.prime_map[tag] = results;
+    mstate.compare_prime_map[tag] = results;
     
     // send the first request, which computes n1
     worker_req.set_arg("param", "n1"); 
@@ -174,16 +184,33 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
       struct Count_prime_result results;
       results.count = 0;
       results.first_tag = first_tag;
-      mstate.prime_map[mstate.next_tag] = results;
+      mstate.compare_prime_map[mstate.next_tag] = results;
 
-      // param: n2, n3, n4
+      // set param: n2, n3, n4
       worker_req.set_tag(mstate.next_tag++);
       worker_req.set_arg("param", "n" + std::to_string(i + 1));
       send(worker_req);
     }
-  } else {
-    send(worker_req);
+    return;
+  } 
+
+  // countprimes
+  if (client_req.get_arg("cmd") == "countprimes") {
+    auto request_string = client_req.get_request_string();
+    // repeated request - return directly
+    if (mstate.count_prime_map.find(request_string) != mstate.count_prime_map.end()) {
+      send_client_response(client_handle, mstate.count_prime_map[request_string]);
+      mstate.client_map.erase(tag);
+    } else {
+      // request not cache'd yet 
+      mstate.request_map[tag] = request_string;
+      send(worker_req);
+    }
+    return;
   }
+
+  // otherwise
+  send(worker_req);
 
   // We're done!  This event handler now returns, and the master
   // process calls another one of your handlers when action is
