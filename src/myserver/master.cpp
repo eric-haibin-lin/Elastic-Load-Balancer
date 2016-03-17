@@ -89,8 +89,9 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
     auto& current = mstate.prime_map[tag];
     auto first_tag = current.first_tag;
     auto& first = mstate.prime_map[first_tag];
-    
+    // increment counter
     first.count++;
+    // update data
     current.data = std::stoi(resp.get_response());
     if (first.count == 4) {
       // the other results
@@ -105,19 +106,22 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
       } else {
         aggregate_resp.set_response("There are more primes in second range.");
       }
+      // send result
       send_client_response(mstate.client_map[first_tag], aggregate_resp);
       mstate.client_map.erase(first_tag);
     }
     mstate.num_ongoing_client_requests--;
+
   } else {
+    // not compare_prime: just send the result back
     send_client_response(mstate.client_map[tag], resp);
     mstate.client_map.erase(tag);
     mstate.num_ongoing_client_requests--;
   }
 
-  // Send the next message if necessary
+  // Send the ack message if necessary
   if (mstate.num_ongoing_client_requests == 0 && mstate.message_queue.size() > 0) {
-    // Get the next request
+    // Get the ack request
     auto request = mstate.message_queue.front();
     mstate.message_queue.pop();
 
@@ -160,20 +164,21 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
     results.first_tag = first_tag;
     mstate.prime_map[tag] = results;
     
-    // send the first request 
-    worker_req.set_arg("i", "0");
+    // send the first request, which computes n1
+    worker_req.set_arg("param", "n1"); 
     send(worker_req);
 
-    // the other three requests
+    // the other three requests, which computes n2, n3, n4
     for (int i = 1; i < 4; i++) {
       // init the struct for partial results
       struct Count_prime_result results;
       results.count = 0;
       results.first_tag = first_tag;
       mstate.prime_map[mstate.next_tag] = results;
-      // send
+
+      // param: n2, n3, n4
       worker_req.set_tag(mstate.next_tag++);
-      worker_req.set_arg("i", std::to_string(i));
+      worker_req.set_arg("param", "n" + std::to_string(i + 1));
       send(worker_req);
     }
   } else {
@@ -183,7 +188,6 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
   // We're done!  This event handler now returns, and the master
   // process calls another one of your handlers when action is
   // required.
-
 }
 
 void send(Request_msg worker_req) {
