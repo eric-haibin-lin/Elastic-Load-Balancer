@@ -12,6 +12,7 @@
 #include <string>
 #include "tools/work_queue.h"
 
+// Maybe 23 threads is more appropriate
 #define NUM_THREADS 24
 
 static WorkQueue<Request_msg> queue;
@@ -123,5 +124,24 @@ void worker_thread() {
 }
 
 void worker_handle_request(const Request_msg& req) {
-  queue.put_work(req);
+
+  // case tellmenow: do it instantly 
+  if (req.get_arg("cmd") == "tellmenow") {
+    
+    Response_msg resp(req.get_tag());
+    DLOG(INFO) << "Worker got request: [" << req.get_tag() << ":" << req.get_request_string() << "]\n";
+
+    double startTime = CycleTimer::currentSeconds();
+    execute_work(req, resp);
+
+    double dt = CycleTimer::currentSeconds() - startTime;
+    DLOG(INFO) << "Worker completed work in " << (1000.f * dt) << " ms (" << req.get_tag()  << ")\n";
+
+    // send a response string to the master
+    worker_send_response(resp);
+
+  } else {
+    queue.put_work(req);  
+  }
+
 }
