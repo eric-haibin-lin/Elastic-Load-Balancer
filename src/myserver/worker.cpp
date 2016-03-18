@@ -12,7 +12,7 @@
 #include <string>
 #include "tools/work_queue.h"
 
-// Maybe 23 threads is more appropriate
+// TODO Maybe 23 threads is more appropriate
 #define NUM_THREADS 24
 
 static WorkQueue<Request_msg> queue;

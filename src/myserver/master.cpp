@@ -33,6 +33,7 @@ static struct Master_state {
   std::map<int, Count_prime_result> compare_prime_map;
   std::map<std::string, Response_msg> count_prime_map;
   std::map<int, std::string> request_map;
+  //TODO track the workload of each worker node
 
 } mstate;
 
@@ -78,6 +79,8 @@ void handle_new_worker_online(Worker_handle worker_handle, int tag) {
     mstate.server_ready = true;
   }
 }
+
+// TODO: update the workload of the worker node as well 
 
 void handle_worker_response(Worker_handle worker_handle, const Response_msg& resp) {
 
@@ -218,6 +221,10 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
 }
 
 void send(Request_msg worker_req) {
+
+  // TODO: we want to check the workload of each workers before the
+  // task assignment, esp. projectidea tasks
+
   // Round robin all workers
   send_request_to_worker(mstate.my_worker[mstate.worker_idx], worker_req);
   mstate.num_ongoing_client_requests++;
@@ -229,6 +236,10 @@ void handle_tick() {
   // TODO: you may wish to take action here.  This method is called at
   // fixed time intervals, according to how you set 'tick_period' in
   // 'master_node_init'.
+
+  // TODO: periodically check the load of each worker node, and shutdown/
+  // boot up new worker nodes if necessary. Currently the number of 
+  // workers is fixed
 
 }
 
