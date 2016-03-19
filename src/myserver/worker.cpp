@@ -14,11 +14,15 @@
 
 // TODO Maybe 23 threads is more appropriate
 #define NUM_THREADS 24
+#define TELL_ME_NOW_NUM_THREADS 1
 
 static WorkQueue<Request_msg> queue;
+static WorkQueue<Request_msg> tell_me_now_queue;
 static std::thread threads[NUM_THREADS];
+static std::thread tell_me_now_threads[TELL_ME_NOW_NUM_THREADS];
 
 void worker_thread();
+void tell_me_now_worker_thread();
 
 // Generate a valid 'countprimes' request dictionary from integer 'n'
 static void create_computeprimes_req(Request_msg& req, int n) {
@@ -81,7 +85,27 @@ void worker_node_init(const Request_msg& params) {
     threads[i] = std::thread(worker_thread);
     threads[i].detach();
   }
+  for (int i = 0; i < TELL_ME_NOW_NUM_THREADS; i++) {
+    tell_me_now_threads[i] = std::thread(tell_me_now_worker_thread);
+    tell_me_now_threads[i].detach();
+  }
+}
 
+void tell_me_now_worker_thread() {
+  while (true) {
+    auto req = tell_me_now_queue.get_work();
+    Response_msg resp(req.get_tag());
+    DLOG(INFO) << "Worker got request: [" << req.get_tag() << ":" << req.get_request_string() << "]\n";
+
+    double startTime = CycleTimer::currentSeconds();
+    execute_work(req, resp);
+
+    double dt = CycleTimer::currentSeconds() - startTime;
+    DLOG(INFO) << "Worker completed work in " << (1000.f * dt) << " ms (" << req.get_tag()  << ")\n";
+
+    // send a response string to the master
+    worker_send_response(resp);
+  }
 }
 
 void worker_thread() {
@@ -104,7 +128,6 @@ void worker_thread() {
       // built on four calls to execute_execute work.  All other
       // requests from the client are one-to-one with calls to
       // execute_work.
-
       execute_compareprimes_partial(req, resp);
 
     } else {
@@ -127,19 +150,7 @@ void worker_handle_request(const Request_msg& req) {
 
   // case tellmenow: do it instantly 
   if (req.get_arg("cmd") == "tellmenow") {
-    
-    Response_msg resp(req.get_tag());
-    DLOG(INFO) << "Worker got request: [" << req.get_tag() << ":" << req.get_request_string() << "]\n";
-
-    double startTime = CycleTimer::currentSeconds();
-    execute_work(req, resp);
-
-    double dt = CycleTimer::currentSeconds() - startTime;
-    DLOG(INFO) << "Worker completed work in " << (1000.f * dt) << " ms (" << req.get_tag()  << ")\n";
-
-    // send a response string to the master
-    worker_send_response(resp);
-
+    tell_me_now_queue.put_work(req);  
   } else {
     queue.put_work(req);  
   }
