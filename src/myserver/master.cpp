@@ -27,13 +27,16 @@ static struct Master_state {
   int next_tag;
 
   Worker_handle my_worker[16];
+  int worker_project_idea_count[16];
   int worker_idx;
   std::queue<Request_msg> message_queue;
   std::map<int, Client_handle> client_map;
   std::map<int, Count_prime_result> compare_prime_map;
   std::map<std::string, Response_msg> count_prime_map;
   std::map<int, std::string> request_map;
+  std::map<int, int> worker_assignment_map;
   //TODO track the workload of each worker node
+
 
 } mstate;
 
@@ -94,6 +97,13 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
     auto request_string = mstate.request_map[tag];
     mstate.count_prime_map[request_string] = resp;
     mstate.request_map.erase(tag);
+  }
+
+  // special case: project_idea
+  if (mstate.worker_assignment_map.find(tag) != mstate.worker_assignment_map.end()) {
+    auto idx = mstate.worker_assignment_map[tag];
+    mstate.worker_project_idea_count[idx] -= 1;
+    mstate.worker_assignment_map.erase(tag);
   }
 
   // special case: compare_prime, aggregate results 
@@ -224,6 +234,22 @@ void send(Request_msg worker_req) {
 
   // TODO: we want to check the workload of each workers before the
   // task assignment, esp. projectidea tasks
+
+  if (worker_req.get_arg("cmd") == "projectidea") {
+    auto idx = 0;
+    auto min = mstate.worker_project_idea_count[0];
+    for (int i = 1; i < mstate.max_num_workers; i++) {
+      if (mstate.worker_project_idea_count[i] < min) {
+        min = mstate.worker_project_idea_count[i];
+        idx = i;
+      }
+    }
+    send_request_to_worker(mstate.my_worker[idx], worker_req);
+    mstate.num_ongoing_client_requests++;
+    mstate.worker_project_idea_count[idx] += 1;
+    mstate.worker_assignment_map[worker_req.get_tag()] = idx;
+    return;
+  } 
 
   // Round robin all workers
   send_request_to_worker(mstate.my_worker[mstate.worker_idx], worker_req);

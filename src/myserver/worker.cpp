@@ -15,14 +15,19 @@
 // TODO Maybe 23 threads is more appropriate
 #define NUM_THREADS 24
 #define TELL_ME_NOW_NUM_THREADS 1
+#define PROJ_IDEA_NUM_THREADS 2
 
 static WorkQueue<Request_msg> queue;
 static WorkQueue<Request_msg> tell_me_now_queue;
+static WorkQueue<Request_msg> proj_idea_queue;
+
 static std::thread threads[NUM_THREADS];
 static std::thread tell_me_now_threads[TELL_ME_NOW_NUM_THREADS];
+static std::thread proj_idea_threads[PROJ_IDEA_NUM_THREADS];
 
 void worker_thread();
 void tell_me_now_worker_thread();
+void proj_idea_worker_thread();
 
 // Generate a valid 'countprimes' request dictionary from integer 'n'
 static void create_computeprimes_req(Request_msg& req, int n) {
@@ -89,6 +94,27 @@ void worker_node_init(const Request_msg& params) {
     tell_me_now_threads[i] = std::thread(tell_me_now_worker_thread);
     tell_me_now_threads[i].detach();
   }
+  for (int i = 0; i < PROJ_IDEA_NUM_THREADS; i++) {
+    proj_idea_threads[i] = std::thread(proj_idea_worker_thread);
+    proj_idea_threads[i].detach();
+  }
+}
+
+void proj_idea_worker_thread() {
+  while (true) {
+    auto req = proj_idea_queue.get_work();
+    Response_msg resp(req.get_tag());
+    DLOG(INFO) << "Worker got request: [" << req.get_tag() << ":" << req.get_request_string() << "]\n";
+
+    double startTime = CycleTimer::currentSeconds();
+    execute_work(req, resp);
+
+    double dt = CycleTimer::currentSeconds() - startTime;
+    DLOG(INFO) << "Worker completed work in " << (1000.f * dt) << " ms (" << req.get_tag()  << ")\n";
+
+    // send a response string to the master
+    worker_send_response(resp);
+  }
 }
 
 void tell_me_now_worker_thread() {
@@ -151,6 +177,8 @@ void worker_handle_request(const Request_msg& req) {
   // case tellmenow: do it instantly 
   if (req.get_arg("cmd") == "tellmenow") {
     tell_me_now_queue.put_work(req);  
+  } else if (req.get_arg("cmd") == "projectidea") {
+    proj_idea_queue.put_work(req);
   } else {
     queue.put_work(req);  
   }
