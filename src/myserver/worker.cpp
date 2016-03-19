@@ -13,7 +13,7 @@
 #include "tools/work_queue.h"
 
 // TODO Maybe 23 threads is more appropriate
-#define NUM_THREADS 24
+#define NUM_THREADS 23
 #define TELL_ME_NOW_NUM_THREADS 1
 #define PROJ_IDEA_NUM_THREADS 2
 
