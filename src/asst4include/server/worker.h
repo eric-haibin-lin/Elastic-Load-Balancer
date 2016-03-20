@@ -1,6 +1,11 @@
 #ifndef __ASST4INCLUDE_WORKER_H__
 #define __ASST4INCLUDE_WORKER_H__
 
+// TODO Maybe 23 threads is more appropriate
+#define NUM_THREADS 20
+#define TELL_ME_NOW_NUM_THREADS 1
+#define PROJ_IDEA_NUM_THREADS 2 
+
 class Request_msg;
 class Response_msg;
 
