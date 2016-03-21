@@ -6,11 +6,17 @@
 #include "server/messages.h"
 #include "server/master.h"
 #include "server/worker.h"
+#include "tools/cycle_timer.h"
 #include <map>
 #include <string>
 
+#define TICK_PERIOD 1
+#define PROJECT_IDEA_THRESHOLD 4000
+#define OTHER_THRESHOLD 2400
+#define SLOWER_UB 0.2
+#define SLOWER_LB 0.02
+#define REQ_WKR_THD 24
 
-#define TICK_PERIOD 4
 
 struct Count_prime_result {
     int count;
@@ -20,6 +26,7 @@ struct Count_prime_result {
 
 struct Worker_count {
     bool if_idle;
+    bool if_shutdown;
     int idx;
     int ongoing_req_count;
     int project_idea_count;
@@ -35,6 +42,8 @@ static struct Master_state {
     bool server_ready;
     int max_num_workers;
     int num_ongoing_client_requests;
+    int last_ongoing_req_num;
+    int num_slower;
     int next_tag;
     int num_worker;
 
@@ -47,6 +56,7 @@ static struct Master_state {
     std::map<int, int> worker_assignment_map;
     std::map<int, int> project_idea_map;
     std::map<int, int> new_worker_map;
+    std::map<int, double> tag_time_map;
     //TODO track the workload of each worker node
 
 
@@ -58,14 +68,17 @@ void master_node_init(int max_workers, int& tick_period) {
 
     // set up tick handler to fire every 5 seconds. (feel free to
     // configure as you please)
-    tick_period = 2 ;
+    tick_period = TICK_PERIOD;
 
     mstate.next_tag = 0;
     mstate.max_num_workers = max_workers;
     mstate.num_ongoing_client_requests = 0;
+    mstate.last_ongoing_req_num = 0;
+    mstate.num_slower = 0;
     mstate.num_worker = 0;
     for(int i = 0; i < 4; ++i){
         mstate.workers[i].if_idle = true;
+        mstate.workers[i].if_shutdown = true;
     }
     // don't mark the server as ready until the server is ready to go.
     // This is actually when the first worker is up and running, not
@@ -81,6 +94,7 @@ void master_node_init(int max_workers, int& tick_period) {
 
 void worker_count_init(Worker_count * wc, int idx){
     wc->if_idle = false;
+    wc->if_shutdown = false;
     wc->project_idea_count = 0;
     wc->idx = idx;
     wc->ongoing_req_count = 0;
@@ -91,12 +105,14 @@ void handle_new_worker_online(Worker_handle worker_handle, int tag) {
     // 'tag' allows you to identify which worker request this response
     // corresponds to.  Since the starter code only sends off one new
     // worker request, we don't use it here.
-    
-    int idx = mstate.new_worker_map[tag];
 
+    int idx = mstate.new_worker_map[tag];
+    mstate.new_worker_map.erase(tag);
     mstate.my_worker[idx] = worker_handle;
     worker_count_init(&mstate.workers[idx], idx);
-    
+
+    mstate.num_worker++;
+
     // Now that a worker is booted, let the system know the server is
     // ready to begin handling client requests.  The test harness will
     // now start its timers and start hitting your server with requests.
@@ -113,21 +129,34 @@ void handle_worker_response(Worker_handle worker_handle, const Response_msg& res
     // Master node has received a response from one of its workers.
     // Here we directly return this response to the client.
     auto tag = resp.get_tag();
-    DLOG(INFO) << "Master received a response from a worker: [" << tag << ":" << resp.get_response() << "]" << std::endl;
 
     mstate.num_ongoing_client_requests--;
 
-    if (mstate.worker_assignment_map.find(tag) != mstate.worker_assignment_map.end()) {
-        auto idx = mstate.worker_assignment_map[tag];
-        mstate.workers[idx].ongoing_req_count--;
-        mstate.worker_assignment_map.erase(tag);
-    }
+    auto idx = mstate.worker_assignment_map[tag];
+    mstate.workers[idx].ongoing_req_count--;
+    mstate.worker_assignment_map.erase(tag);
+
+    // count time
+    double startTime = mstate.tag_time_map[tag];
+    mstate.tag_time_map.erase(tag);
+
+    double latency = 1000.f * (CycleTimer::currentSeconds() - startTime);
+
+    DLOG(INFO) << "Master received a response from a worker: [" << tag << ":" << resp.get_response() << "], with latency: " << latency << "ms." << std::endl;
+
 
     // special case: project_idea
     if (mstate.project_idea_map.find(tag) != mstate.project_idea_map.end()){
         auto idx = mstate.project_idea_map[tag];
         mstate.workers[idx].project_idea_count--;
         mstate.project_idea_map.erase(tag);
+        if(latency > PROJECT_IDEA_THRESHOLD){
+            mstate.num_slower++;
+        }
+    } else {
+        if(latency > OTHER_THRESHOLD){
+            mstate.num_slower++;
+        }
     }
 
     // special case: compute_prime. cache the result
@@ -188,7 +217,7 @@ void handle_client_request(Client_handle client_handle, const Request_msg& clien
 
     // lastrequest
     if (client_req.get_arg("cmd") == "lastrequest") {
-        Response_msg resp(0);
+        Response_msg resp(mstate.next_tag);
         resp.set_response("ack");
         send_client_response(client_handle, resp);
         return;
@@ -252,11 +281,11 @@ void send(Request_msg worker_req) {
     // task assignment, esp. projectidea tasks
     // TODO: have special case for tell_me_now;
     int idx = 0;
-    
+
     if (worker_req.get_arg("cmd") == "projectidea") {
         int min = 999999;
         for (int i = 0; i < mstate.max_num_workers; i++) {
-            if (!mstate.workers[i].if_idle && mstate.workers[i].project_idea_count < min) {
+            if (!mstate.workers[i].if_shutdown && !mstate.workers[i].if_idle && mstate.workers[i].project_idea_count < min) {
                 min = mstate.workers[i].project_idea_count;
                 idx = i;
             }
@@ -266,18 +295,24 @@ void send(Request_msg worker_req) {
     } else {
         int min = 999999;
         for(int i = 0; i < mstate.max_num_workers; ++i){
-            if(!mstate.workers[i].if_idle && mstate.workers[i].ongoing_req_count < min) {
+            if(!mstate.workers[i].if_shutdown && !mstate.workers[i].if_idle && mstate.workers[i].ongoing_req_count < min) {
                 min = mstate.workers[i].ongoing_req_count;
                 idx = i;
             }
         }
     } 
-    
-    
+
+
     send_request_to_worker(mstate.my_worker[idx], worker_req);
     mstate.workers[idx].ongoing_req_count++;
     mstate.num_ongoing_client_requests++;
+    mstate.last_ongoing_req_num++;
     mstate.worker_assignment_map[worker_req.get_tag()] = idx;
+    double startTime = CycleTimer::currentSeconds();
+    mstate.tag_time_map[worker_req.get_tag()] = startTime;
+
+    DLOG(INFO) << "Sending to worker: " << idx << std::endl;
+
     return;
 }
 
@@ -290,6 +325,77 @@ void handle_tick() {
     // TODO: periodically check the load of each worker node, and shutdown/
     // boot up new worker nodes if necessary. Currently the number of 
     // workers is fixed
+
+    bool if_project_idea_exceeds = false;
+    // step 1: collect garbage worker node;
+    for(int i = 0; i < mstate.max_num_workers; ++i){
+        if(mstate.workers[i].if_shutdown && !mstate.workers[i].if_idle && mstate.workers[i].ongoing_req_count == 0){
+            //need to collect
+            kill_worker_node(mstate.my_worker[i]);  
+            mstate.workers[i].if_idle = true;
+        }
+        if(mstate.workers[i].project_idea_count > 2)
+            if_project_idea_exceeds = true;
+    }
+
+
+
+    // If too much requests, then let's have a new worker node
+    double slower_ratio = 0;
+    if(mstate.last_ongoing_req_num != 0){
+        slower_ratio = (double)mstate.num_slower / (double)mstate.last_ongoing_req_num;
+    }
+
+    while(mstate.num_worker < mstate.max_num_workers && (slower_ratio > SLOWER_UB || if_project_idea_exceeds)) {
+        // open a new node;
+        DLOG(INFO) << "Needs add a worker_node" << CycleTimer::currentSeconds() << std::endl;
+        DLOG(INFO) << "Num_worker: " << mstate.num_worker << std::endl;
+        DLOG(INFO) << "SLOWER_Ratio: " << slower_ratio << std::endl; 
+        for(int i = 0 ; i < mstate.max_num_workers; ++i){
+            if(mstate.workers[i].if_shutdown && !mstate.workers[i].if_idle){
+                //reopen this;
+                mstate.workers[i].if_shutdown = false;
+                mstate.num_worker++;
+                DLOG(INFO) << "Adding worker: " << i << std::endl;
+                break;
+            }
+            if(mstate.workers[i].if_idle){
+                Request_msg req(mstate.next_tag);
+                req.set_arg("name", "my worker " + std::to_string(i));
+                request_new_worker_node(req);
+                mstate.new_worker_map[mstate.next_tag] = i;
+                mstate.next_tag++;
+                DLOG(INFO) << "Adding worker: " << i << std::endl;
+                break;
+            }
+        }
+        mstate.num_slower = 0;
+        mstate.last_ongoing_req_num = 0;
+        return;
+    } 
+
+    if(mstate.num_worker > 1 && slower_ratio < SLOWER_LB  && ((double)mstate.num_ongoing_client_requests / (double) (mstate.num_worker - 1) < REQ_WKR_THD )) {
+        DLOG(INFO) << "Needs kill a worker_node" << CycleTimer::currentSeconds() << std::endl;
+        DLOG(INFO) << "Num_worker: " << mstate.num_worker << std::endl;
+        DLOG(INFO) << "SLOWER_Ratio: " << slower_ratio << std::endl; 
+        DLOG(INFO) << "REQ_WKR_RATIO: " <<(double)mstate.num_ongoing_client_requests / (double) (mstate.num_worker - 1) << std::endl; 
+        int min = 99999;
+        int idx = -1;
+        for(int i = 0 ; i < mstate.max_num_workers; ++i){
+            if(!mstate.workers[i].if_shutdown && mstate.workers[i].ongoing_req_count < min && mstate.workers[i].project_idea_count == 0){
+                min = mstate.workers[i].ongoing_req_count;
+                idx = i;
+            }
+        }  
+        if(idx >= 0){
+            //decide to terminate this one;
+            DLOG(INFO) << "Killing worker: " << idx << std::endl;
+            mstate.workers[idx].if_shutdown = true;
+            mstate.num_worker--;
+        }
+        mstate.num_slower = 0;
+        mstate.last_ongoing_req_num = 0;
+    }
 
 }
 
