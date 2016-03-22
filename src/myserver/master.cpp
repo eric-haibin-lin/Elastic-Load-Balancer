@@ -10,10 +10,10 @@
 #include <map>
 #include <string>
 
-#define TICK_PERIOD 1
+#define TICK_PERIOD 2
 #define PROJECT_IDEA_THRESHOLD 4000
-#define OTHER_THRESHOLD 2400
-#define SLOWER_UB 0.2
+#define OTHER_THRESHOLD 2200
+#define SLOWER_UB 0.1
 #define SLOWER_LB 0.02
 #define REQ_WKR_THD 24
 
@@ -110,8 +110,9 @@ void handle_new_worker_online(Worker_handle worker_handle, int tag) {
     mstate.new_worker_map.erase(tag);
     mstate.my_worker[idx] = worker_handle;
     worker_count_init(&mstate.workers[idx], idx);
-
     mstate.num_worker++;
+
+    DLOG(INFO) << "Finish initialting worker: " << idx << std::endl;
 
     // Now that a worker is booted, let the system know the server is
     // ready to begin handling client requests.  The test harness will
@@ -338,15 +339,13 @@ void handle_tick() {
             if_project_idea_exceeds = true;
     }
 
-
-
     // If too much requests, then let's have a new worker node
     double slower_ratio = 0;
     if(mstate.last_ongoing_req_num != 0){
         slower_ratio = (double)mstate.num_slower / (double)mstate.last_ongoing_req_num;
     }
 
-    while(mstate.num_worker < mstate.max_num_workers && (slower_ratio > SLOWER_UB || if_project_idea_exceeds)) {
+    if(mstate.num_worker < mstate.max_num_workers && (slower_ratio > SLOWER_UB || if_project_idea_exceeds)) {
         // open a new node;
         DLOG(INFO) << "Needs add a worker_node" << CycleTimer::currentSeconds() << std::endl;
         DLOG(INFO) << "Num_worker: " << mstate.num_worker << std::endl;
@@ -356,8 +355,8 @@ void handle_tick() {
                 //reopen this;
                 mstate.workers[i].if_shutdown = false;
                 mstate.num_worker++;
-                DLOG(INFO) << "Adding worker: " << i << std::endl;
-                break;
+                DLOG(INFO) << "Adding worker waking up: " << i << std::endl;
+                //break;
             }
             if(mstate.workers[i].if_idle){
                 Request_msg req(mstate.next_tag);
@@ -366,7 +365,7 @@ void handle_tick() {
                 mstate.new_worker_map[mstate.next_tag] = i;
                 mstate.next_tag++;
                 DLOG(INFO) << "Adding worker: " << i << std::endl;
-                break;
+                //break;
             }
         }
         mstate.num_slower = 0;
@@ -374,7 +373,8 @@ void handle_tick() {
         return;
     } 
 
-    if(mstate.num_worker > 1 && slower_ratio < SLOWER_LB  && ((double)mstate.num_ongoing_client_requests / (double) (mstate.num_worker - 1) < REQ_WKR_THD )) {
+    bool flag = true;
+    while(flag && mstate.num_worker > 1 && slower_ratio < SLOWER_LB  && ((double)mstate.num_ongoing_client_requests / (double) (mstate.num_worker - 1) < REQ_WKR_THD )) {
         DLOG(INFO) << "Needs kill a worker_node" << CycleTimer::currentSeconds() << std::endl;
         DLOG(INFO) << "Num_worker: " << mstate.num_worker << std::endl;
         DLOG(INFO) << "SLOWER_Ratio: " << slower_ratio << std::endl; 
@@ -392,10 +392,11 @@ void handle_tick() {
             DLOG(INFO) << "Killing worker: " << idx << std::endl;
             mstate.workers[idx].if_shutdown = true;
             mstate.num_worker--;
+        } else {
+            flag = false;
         }
-        mstate.num_slower = 0;
-        mstate.last_ongoing_req_num = 0;
     }
-
+    mstate.num_slower = 0;
+    mstate.last_ongoing_req_num = 0;
 }
 
