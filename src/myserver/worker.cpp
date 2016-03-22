@@ -12,9 +12,10 @@
 #include <string>
 #include "tools/work_queue.h"
 
+// TODO Maybe 23 threads is more appropriate
 #define NUM_THREADS 20
 #define TELL_ME_NOW_NUM_THREADS 1
-#define PROJ_IDEA_NUM_THREADS 2
+#define PROJ_IDEA_NUM_THREADS 2 
 
 static WorkQueue<Request_msg> queue;
 static WorkQueue<Request_msg> tell_me_now_queue;

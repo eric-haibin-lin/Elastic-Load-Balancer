@@ -11,9 +11,9 @@
 #include <string>
 
 #define TICK_PERIOD 2
-#define PROJECT_IDEA_THRESHOLD 4000
+#define PROJECT_IDEA_THRESHOLD 3750
 #define OTHER_THRESHOLD 2200
-#define SLOWER_UB 0.1
+#define SLOWER_UB 0.08
 #define SLOWER_LB 0.02
 #define REQ_WKR_THD 24
 
