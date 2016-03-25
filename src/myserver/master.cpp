@@ -11,12 +11,16 @@
 #include <string>
 
 #define TICK_PERIOD 2
-#define PROJECT_IDEA_THRESHOLD 3750
-#define OTHER_THRESHOLD 2200
+#define PROJECT_IDEA_THRESHOLD 3600
+#define OTHER_THRESHOLD 2400
 #define SLOWER_UB 0.08
-#define SLOWER_LB 0.02
-#define REQ_WKR_THD 24
+#define SLOWER_LB 0.01
+#define REQ_WKR_THD 48
 
+//some capacity ratio
+#define CAP_UB 0.7
+#define CAP_LB 0.3
+#define REQ_PER_WKR 48
 
 struct Count_prime_result {
     int count;
@@ -316,8 +320,74 @@ void send(Request_msg worker_req) {
 
     return;
 }
-
 void handle_tick() {
+    bool if_project_idea_exceeds = false;
+    // step 1: collect garbage worker node;
+    for(int i = 0; i < mstate.max_num_workers; ++i){
+        if(mstate.workers[i].if_shutdown && !mstate.workers[i].if_idle && mstate.workers[i].ongoing_req_count == 0){
+            //need to collect
+            kill_worker_node(mstate.my_worker[i]);  
+            mstate.workers[i].if_idle = true;
+        }
+        if(mstate.workers[i].project_idea_count >= 2)
+            if_project_idea_exceeds = true;
+    }
+
+    double cap_ratio = mstate.num_ongoing_client_requests * 1.0f / (mstate.num_worker * REQ_PER_WKR);
+    if(mstate.num_worker < mstate.max_num_workers && (cap_ratio > CAP_UB || if_project_idea_exceeds)) {
+        // open a new node;
+        DLOG(INFO) << "Needs add a worker_node" << CycleTimer::currentSeconds() << std::endl;
+        DLOG(INFO) << "Num_worker: " << mstate.num_worker << std::endl;
+        DLOG(INFO) << "CAP_Ratio: " << cap_ratio << std::endl; 
+        int add_count = 0;
+        for(int i = 0 ; i < mstate.max_num_workers && add_count < 3; ++i){
+            if(mstate.workers[i].if_shutdown && !mstate.workers[i].if_idle){
+                //reopen this;
+                mstate.workers[i].if_shutdown = false;
+                mstate.num_worker++;
+                DLOG(INFO) << "Adding worker waking up: " << i << std::endl;
+                add_count++;
+                //break;
+            }
+            if(mstate.workers[i].if_idle){
+                Request_msg req(mstate.next_tag);
+                req.set_arg("name", "my worker " + std::to_string(i));
+                request_new_worker_node(req);
+                mstate.new_worker_map[mstate.next_tag] = i;
+                mstate.next_tag++;
+                DLOG(INFO) << "Adding worker: " << i << std::endl;
+                add_count++;
+                //break;
+            }
+        }
+    } 
+
+    if(mstate.num_worker > 1 && !if_project_idea_exceeds &&  (cap_ratio < CAP_LB)) {
+        DLOG(INFO) << "Needs kill a worker_node" << CycleTimer::currentSeconds() << std::endl;
+        DLOG(INFO) << "Num_worker: " << mstate.num_worker << std::endl;
+        DLOG(INFO) << "CAP_Ratio: " << cap_ratio << std::endl; 
+        int min = 99999;
+        int idx = -1;
+        for(int i = 0 ; i < mstate.max_num_workers; ++i){
+            if(!mstate.workers[i].if_shutdown && mstate.workers[i].ongoing_req_count < min && mstate.workers[i].project_idea_count == 0){
+                min = mstate.workers[i].ongoing_req_count;
+                idx = i;
+            }
+        }  
+        if(idx >= 0){
+            //decide to terminate this one;
+            DLOG(INFO) << "Killing worker: " << idx << std::endl;
+            mstate.workers[idx].if_shutdown = true;
+            mstate.num_worker--;
+        } 
+    }
+
+    mstate.num_slower = 0;
+    mstate.last_ongoing_req_num = 0;
+    return;
+
+}
+void handle_tick_1() {
 
     // TODO: you may wish to take action here.  This method is called at
     // fixed time intervals, according to how you set 'tick_period' in
@@ -341,6 +411,7 @@ void handle_tick() {
 
     // If too much requests, then let's have a new worker node
     double slower_ratio = 0;
+    int add_UB = mstate.num_ongoing_client_requests  / (mstate.num_worker * REQ_WKR_THD) + 2; 
     if(mstate.last_ongoing_req_num != 0){
         slower_ratio = (double)mstate.num_slower / (double)mstate.last_ongoing_req_num;
     }
@@ -350,6 +421,7 @@ void handle_tick() {
         DLOG(INFO) << "Needs add a worker_node" << CycleTimer::currentSeconds() << std::endl;
         DLOG(INFO) << "Num_worker: " << mstate.num_worker << std::endl;
         DLOG(INFO) << "SLOWER_Ratio: " << slower_ratio << std::endl; 
+
         for(int i = 0 ; i < mstate.max_num_workers; ++i){
             if(mstate.workers[i].if_shutdown && !mstate.workers[i].if_idle){
                 //reopen this;
