@@ -1,0 +1,112 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{fancyhdr}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{pgffor}
+\usepackage{float}
+\graphicspath{ {Sec_4/} }
+\newcommand{\code}[1]{\texttt{#1}}
+
+% \lstset{style=mystyle}
+
+\oddsidemargin0cm
+\topmargin-2cm     %I recommend adding these three lines to increase the
+\textwidth16.5cm   %amount of usable space on the page (and save trees)
+\textheight23.5cm
+
+\newcommand{\mynameone}{Yiming Wu}
+\newcommand{\mynametwo}{Haibin Lin}
+\newcommand{\myhwnum}{1}
+
+\pagestyle{fancyplain}
+\lhead{\fancyplain{}{\textbf{HW\myhwnum}}}      % Note the different brackets!
+\rhead{\fancyplain{}{\mynameone \mynametwo}}
+\chead{\fancyplain{}{15-418}}
+
+\title{15-418 Parallel}
+\author{Yiming Wu, Haibin Lin}
+\date{Mar. 2016}
+
+\begin{document}
+
+\maketitle
+
+\section{Work Assignment} % (fold)
+\label{sec:work_assignment}
+The work assignment policy we are using right now is assign the job to the least loaded worker except \code{project idea} jobs.
+For \code{project idea} job, the master node will assign it to the worker node with least \code{project idea} jobs.
+% section work_assignment (end)
+
+\section{Elastic Policy} % (fold)
+In this section, we will introduce our Elastic Policy.
+In subsection \ref{sub:policy_based_on_request_number}, we will introduce our final version policy, which get 11/12 on nonuniform2 and full score on all others.
+It is based on the ratio of request number over capacity on worker nodes.
+At the same time, it is a general policy without any special design for traces.
+In subsection \ref{sub:other_pol}, we will introduce some other policy we tried and discuss why they do not perform well on this assignment.
+
+\subsection{Policy based on request number} % (fold)
+\label{sub:policy_based_on_request_number}
+Our submission version policy is based on the ratio of request number over capacity on worker nodes, a.k.a request ratio.
+Here we use the total number of request and total capacity that is 48 request per node times node number.
+We have an upper bound of 0.7 and lower bound of 0.4.
+Each time \code{handle\_tick} is called, our master node will check whether the on going request ratio is out of range.
+
+\subsubsection{Policy to add nodes} % (fold)
+\label{ssub:policy_to_add_nodes}
+There are two situations when we add a worker node. First one is when the request ratio exceeds the upper bound.
+This means that there are going to be too many requests on a node.
+It is time to add nodes to relieve the tense.
+To go deeper, this design is based on the observation that there is usually a peak of request coming in the future when the requests start to come more frequently.
+
+The other one is when number of \code{project idea} tasks on any one worker node reaches 2.
+Here, we choose number 2 because CPU is 2-core with only 2 L3 caches.
+Apparently we donot want there are more than 2 \code{project idea} running on one worker node.
+On the other hand, we decide to add nodes once any one reaches 2 because it is reasonable to assume request comes in a peak.
+% subsubsection policy_to_add_nodes (end)
+
+\subsubsection{Aggresive Adding} % (fold)
+\label{ssub:aggresive_adding}
+We use a policy called aggresive adding when adding nodes, where we add as many nodes as we can once the master decide to add nodes.
+This is also based on the observation that request always comes in a high peak rate in the future once it becomes more frequent.
+With this policy, our master node gets more elasticity when adding nodes.
+This ensures our performance.
+% subsubsection aggresive_adding (end)
+
+\subsubsection{Policy to kill nodes} % (fold)
+\label{ssub:policy_to_kill_nodes}
+When the request ratio is beneath the lower bound, we will find a node with least jobs and descide not to send new request to it, a.k.a try to shut it down.
+We also have to make sure that the node we decide to kill in the future does not have \code{project idea} running.
+Because sometimes there are only \code{project idea} requests.
+
+Every time \code{handle\_tick} is called, master node will check whether there is node that we tried to shut down that has no request going on.
+If so, the master will send the \code{kill} request.
+% subsubsection policy_to_kill_nodes (end)
+
+% subsection policy_based_on_request_number (end)
+
+\subsection{Other Polcy} % (fold)
+\label{sub:other_pol}
+One previous policy we tried is based on the latency of a request to decide whether to add/kill nodes.
+For example, if we found 10\% of the \code{project idea} takes more than 3800ms to finish(grading is on 4100ms),
+we know that it is time to add worker nodes.
+This seems a more plaussable solution but it has some drawbacks under this assignment's conditions.
+Overall, it gets 11/12 on nonuniform1 and 12-3(because of too much worker)/12 on nonuniform3 and full scores on all others.
+The policy is in function \code{handle\_tick1}
+
+One main concern is the unreliable latedays machine performance.
+Running same task twice on latedays at almost same time usually turns out different latencies, which makes our sensitive policy create more worker nodes that are unnecessary.
+
+The other one is that, based on observation, the latency of requests jumps from low level, e.g. 1600ms for \code{countprimes}, to danger level, e.g. over 2500ms in a very short period.
+And when we observe the rising latency, it is already more than 2500ms behind the requests peak comes into worker.
+At that time, adding more worker nodes will not help reliefing piles of requests in old worker nodes.
+% subsectcyion other_pol (end)
+
+\end{document}
