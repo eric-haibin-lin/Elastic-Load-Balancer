@@ -39,6 +39,35 @@
 
 \maketitle
 
+\section{Request Execution} % (fold)
+\label{sec:work_execution}
+
+\subsection{Request management overview} % (fold)
+\label{sub:request_management_overview}
+Each worker node runs multiple concurrent worker threads to serve requests sent from master. 
+
+Requests are managed by several queues, from which worker threads fetch the next request to do. There're three queues: \code{tell\_me\_now\_queue} contains the tell\_me\_now requests sent to this worker node, \code{project\_idea\_queue} contains the project\_idea requests, \code{queue} contains all other kinds of requests. In our implementation, we used the \code{WorkerQueue} class to ensure safe concurrent operation. 
+
+Each thread in worker node is dedicated to serve the requests from one of the three queues. The current configuration, we have 2 threads serving project idea requests, 1 thread serving 	tell me now requests, 44 threads serving other requests. That's in total 48 threads. 
+
+\subsection{Compare prime request execution} % (fold)
+\label{sub:compare_prime_execution}
+The original implementation of compare prime execution involves 4 serial \code{execute\_work} calls. This is parallelized by splitting 1 compare prime requests into 4 sub-requests sent to different worker nodes, where each sub-request involves 1 \code{execute\_work} call. Master node is responsible for gathering sub-request results and return the final response to client. Tag is used in master to identify sub-requests which corresponds to the same compare prime request. 
+
+\subsection{Project idea request execution} % (fold)
+\label{sub:project_idea_execution}
+The execution of a project idea request involves a large working set of size close to size of L3 cache. Given the hardware with 2 L3 cache, the most ideal assignment is 2 project idea requests per worker node, each running on a L3 cache. The master ensures each worker node serve no more than 2 project idea requests so that the workers don't suffer from cache conflict and cache thrashing. 
+
+\subsection{Tell me now request execution} % (fold)
+\label{sub:compare_prime_execution}
+Tell me now requests have strict latency requirement. We have dedicated threads to serve this \code{tell\_me\_now} requests. This makes sure tell me now requests are not queue'd after other latency-insensitive requests. 
+
+\subsection{Caching} % (fold)
+\label{sub:caching}
+We noticed that many repeated \code{count\_prime} requests are tested. Such request is deterministic and computationally expensive, a cache for such request will be great to boost performance. In current implementation, \code{count\_prime} are cache'd in master node. 
+
+% section work_execution (end)
+
 \section{Work Assignment} % (fold)
 \label{sec:work_assignment}
 The work assignment policy we are using right now is assign the job to the least loaded worker except \code{project idea} jobs.
@@ -92,7 +121,7 @@ If so, the master will send the \code{kill} request.
 
 % subsection policy_based_on_request_number (end)
 
-\subsection{Other Polcy} % (fold)
+\subsection{Other Policy} % (fold)
 \label{sub:other_pol}
 One previous policy we tried is based on the latency of a request to decide whether to add/kill nodes.
 For example, if we found 10\% of the \code{project idea} takes more than 3800ms to finish(grading is on 4100ms),
@@ -108,5 +137,8 @@ The other one is that, based on observation, the latency of requests jumps from 
 And when we observe the rising latency, it is already more than 2500ms behind the requests peak comes into worker.
 At that time, adding more worker nodes will not help reliefing piles of requests in old worker nodes.
 % subsectcyion other_pol (end)
+
+\subsection{Extra Credit} % (fold)
+To sum up, our scheduler is not trace-dependent, yet still achieves full score on all test cases :)
 
 \end{document}
